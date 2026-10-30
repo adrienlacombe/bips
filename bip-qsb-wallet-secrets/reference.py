@@ -86,12 +86,14 @@ def make_vectors():
     key = bytes(range(32))
     cases = [(0, 0, 0, 0), (0, 0, 1, 149), (0, 7, 0, 3),
              (1, 0x7fffffff, 1, 42)]
-    seeds = [("bip39", bip39_seed(" ".join(["all"] * 12))),
-             ("raw32", bytes(range(32)))]
+    mnemonic = " ".join(["all"] * 12)
+    seeds = [("bip39", bip39_seed(mnemonic), dict(mnemonic=mnemonic, passphrase="")),
+             ("raw32", bytes(range(32)), {})]
     return {
         "warning": "Public test fixtures. Never use for funds.",
-        "seed_vectors": [dict(seed_source=source, seed=seed.hex(),
-                              key=app_key(seed, source).hex()) for source, seed in seeds],
+        "seed_vectors": [dict(seed_source=source, **extra, seed=seed.hex(),
+                              key=app_key(seed, source).hex())
+                         for source, seed, extra in seeds],
         "key": key.hex(),
         "secrets": [dict(net=n, v=v, r=r, i=i,
                          secret=secret(key, n, v, r, i).hex(),
@@ -142,7 +144,11 @@ def check():
     # It tests B's byte encoding; it is not a QSB spend or a consensus-valid fixture.
     tx = (bytes.fromhex("0200000001") + b"\x11" * 32 + bytes.fromhex("0000000000ffffffff01")
           + (1000).to_bytes(8, "little") + bytes.fromhex("015100000000"))
-    vectors["binding_encoding"] = dict(transaction=tx.hex(), binding=sha256(tx).hex())
+    binding = sha256(tx)
+    round0, round1 = list(range(8)), list(range(140, 147))
+    vectors["binding_encoding"] = dict(
+        transaction=tx.hex(), binding=binding.hex(), round0=round0, round1=round1,
+        digest=disclosure_digest(round0, round1, binding).hex())
     return vectors
 
 

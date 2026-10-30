@@ -49,7 +49,7 @@ This proposal does not assign APDU instruction numbers, PSBT fields, descriptor 
 
 `S` is the wallet's master seed byte string. `K` is the QSB derivation key. `net` is a one-byte derivation namespace; `v` is a vault index; `r` is a zero-based round; `i` is a zero-based secret index. A **vault key set** is the complete collection of 300 secrets for one `(K, net, v)`.
 
-All literal strings used in cryptographic computations are ASCII bytes without an implicit terminator. `||` denotes concatenation; slices use zero-based, end-exclusive bounds. `u16be` and `u32be` denote fixed-width unsigned big-endian integers. Hash outputs are raw bytes, not hexadecimal strings. `HASH160(x) = RIPEMD160(SHA256(x))`.
+All literal strings used in cryptographic computations are ASCII bytes without an implicit terminator. `||` denotes concatenation; slices use zero-based, end-exclusive bounds. `u8`, `u16be`, and `u32be` denote fixed-width unsigned integers of one, two, and four bytes; multi-byte integers are big-endian. Hash outputs are raw bytes, not hexadecimal strings. `HASH160(x) = RIPEMD160(SHA256(x))`.
 
 These encodings apply only to this proposal's derivation and records. Bitcoin transaction serialization retains its own encoding rules.
 
@@ -88,12 +88,14 @@ The profile identifier is the exact string `QSB-HORS-v1`. Its parameters are:
 | Commitment length | 20 bytes |
 | Disclosure cardinality | 8 distinct indices in round 0; 7 in round 1 |
 
+Round `r = 0` is the first digest round, which the QSB paper and the existing device documentation call round 1; `r = 1` is the second.
+
 Namespace `0x01` preserves the existing implementation's test convention. It does not distinguish testnet, signet, and regtest. Test deployments MUST coordinate indices across all of those chains under the same seed, or use separate seeds. This proposal defines no production custody profile for those chains. Other namespace bytes MUST be rejected.
 
 For each valid tuple:
 
 ```text
-m = ASCII("QSB-HORS-v1") || 0x00 || net || u32be(v) || r || u16be(i)
+m = ASCII("QSB-HORS-v1") || 0x00 || u8(net) || u32be(v) || u8(r) || u16be(i)
 s[v][r][i] = HMAC-SHA256(key = K, msg = m)[0:20]
 c[v][r][i] = HASH160(s[v][r][i])
 R[v] = SHA256(ASCII("QSB-HORS-v1/root") ||
@@ -111,7 +113,7 @@ No account component exists in this profile. User accounts, labels, and ordinary
 
 For each seed and namespace, a wallet MUST maintain an allocation high-water mark `next_v`. Allocating a vault reserves the current index and durably increments `next_v` before publishing commitments for use in a deposit. An index reserved for a deposit MUST NOT be reused, even if the deposit is cancelled. At `next_v = 2^31` allocation fails; it MUST NOT wrap.
 
-Read-only derivation of commitments is permitted without allocation, but MUST NOT present the result as safe to fund. A wallet MUST NOT knowingly fund the same vault key set twice, whether in one transaction, in different transactions, or under different script templates. Reuse of the same key set under a new script version is still reuse.
+Read-only derivation of commitments is permitted without allocation, but MUST NOT present the result as safe to fund. A wallet MUST NOT knowingly fund the same vault key set twice, whether in one transaction, in different transactions, or under different script templates. Reuse of the same key set under a new script version is still reuse. Funds sent to a vault script by any party after its key set is exposed require a different `T` and therefore cannot be withdrawn under custody conformance. A wallet SHOULD NOT present an exposed vault's script as a deposit destination and SHOULD warn users not to reuse one.
 
 Before presenting an output as an owned QSB vault, the trusted wallet component MUST validate its supported script template and compare every embedded commitment, in the template-defined order, with the derived commitments. It MUST compute and retain `SHA256(scriptPubKey)` separately from `R`. A template match alone proves neither ownership nor safe allocation. The actual `scriptPubKey`, amount, and outpoint MUST be checked against the funding transaction before disclosure.
 
@@ -128,7 +130,7 @@ Each allocated key set has one of these states:
 
 Confirmation and funding status are separate metadata. They MUST NOT reset disclosure state. A fresh seed starts with an empty allocation history. An imported seed MUST NOT automatically be treated as fresh.
 
-An `allocated` set may transition to `exposed` after authorization, or to `retired`. An `exposed` set may only be retried as specified below or become `retired`. Any uncertainty causes `unknown`; recovery from that state requires trustworthy history, not user dismissal of a warning. A `retired` set remains retired.
+An `allocated` set may transition to `exposed` after authorization, or to `retired`. An `exposed` set may only be retried as specified below or become `retired`. Any uncertainty causes `unknown`; recovery from that state requires trustworthy history, not user dismissal of a warning. A `retired` set remains retired. Confirmation of the disclosed transaction is not by itself a reason to retire an `exposed` set; a wallet SHOULD retain the exact retry so that a reorganization cannot strand funds.
 
 No individual secret may be released before the authorized request and its `exposed` transition are durably recorded. A crash after recording but before returning a response therefore consumes the authorization. Torn writes and unreadable records MUST fail closed. Implementations MUST serialize concurrent requests so that two different requests cannot both pass an unused-state check.
 
@@ -151,6 +153,8 @@ D = SHA256(ASCII("QSB-HORS-v1/reveal") || I || B)
 
 The record is scoped by the actual seed context, profile, namespace, and vault index, and stores the full `R`, script hash, ordered indices, `B`, and `D`. A short wallet fingerprint MUST NOT be the sole authority for selecting another seed's record. The wallet MUST derive `B` itself from the parsed transaction. Accepting a caller-supplied hash alone does not satisfy this requirement.
 
+A transaction MAY spend more than one vault. Each vault has its own request, record, and user authorization; the same `T` combined with a different `I` yields a different `D`, and the retry rules apply to each record separately.
+
 The user MUST authorize release after seeing the network, vault identifier, disclosure cardinality, destination outputs and amounts, and total fee. Displayed transaction values MUST be computed from the supplied transaction and verified previous transactions. If the trusted secret-holding component does not verify the QSB puzzle and the link from the transaction to the requested indices, it MUST prominently identify the operation as disclosure of spending secrets with an **unverified transaction binding**. It MUST NOT describe it as a verified signature authorizing only the displayed destination. Custody conformance permits this explicit trust model; it does not repair that verification gap.
 
 An implementation offering verified transaction binding MUST independently validate the QSB solution, supported script, transaction digest calculations, and requested HORS indices inside the claimed trusted boundary. A helper-input signature, a supplied binding hash, or matching commitments is insufficient evidence of this verification. This proposal does not specify that verifier's algorithm.
@@ -159,7 +163,7 @@ The response contains only the requested preimages, in round-0 order followed by
 
 After a timeout, crash, failed broadcast, or lost response, another disclosure is permitted only when the entire persisted authorization matches: seed context, profile, namespace, index, root, script, ordered indices, and `T`. A fresh user authorization is REQUIRED for a new session. Chunk retries within a live approved session MAY be idempotent. Ending a session MUST clear transient approval, without clearing the persistent record.
 
-Reordering an input or output, changing the destination, amount, fee, sequence, or locktime, or requesting any different index sequence MUST be refused after exposure. Completing input signatures for the same `T` does not change `B`. Fee replacement requiring a different `T` is not a retry. No cancellation, mempool eviction, chain reorganization, or absence of an on-chain spend restores unused status.
+Reordering an input or output, changing the destination, amount, fee, sequence, or locktime, or requesting any different index sequence MUST be refused after exposure. Completing input signatures for the same `T` does not change `B`. Fee replacement requiring a different `T` is not a retry. Because `T` cannot change after exposure, a fee can be raised only by means that leave `T` unchanged, such as a child transaction spending one of its outputs; wallets SHOULD choose the fee with that constraint in mind before requesting disclosure. No cancellation, mempool eviction, chain reorganization, or absence of an on-chain spend restores unused status.
 
 ### Host and solver boundaries
 
@@ -181,7 +185,7 @@ Top-level members, all required:
 | `version` | Integer `1` |
 | `profile` | String `QSB-HORS-v1` |
 | `seed_source` | `bip39` or `raw32` |
-| `network` | String `bitcoin-mainnet`; maps to derivation namespace `0x00` |
+| `network` | String `bitcoin-mainnet`; maps to derivation namespace `0x00`. This version carries no test-namespace state; such state is not portable |
 | `next_v` | Integer in `[0, 2^31]`, the next unallocated index |
 | `vaults` | Array of records sorted by ascending `v`, with no duplicate indices |
 
@@ -197,7 +201,7 @@ Each vault record has exactly these members:
 | `state` | `allocated`, `exposed`, `retired`, or `unknown` |
 | `disclosure` | `null`, or object with exactly `round0`, `round1`, `transaction`, and `digest` |
 
-The disclosure arrays follow the cardinality, range, and ordering rules above; `transaction` is `T` as hex; `digest` is `D` as 64 hex characters. The transaction MUST parse completely, have empty scriptSigs, and have no witness serialization. Its vault input MUST reference `funding`. An exposed record requires non-null script, funding, and disclosure. An allocated record requires null disclosure. Retired and unknown records preserve any available disclosure; a non-null disclosure always requires non-null script and funding. Non-null funding requires a non-null script. Scripts MUST be nonempty and no longer than 10,000 bytes, and MUST be recognized by the importing wallet before use. Resource limits MAY cause an explicit import refusal, never truncation.
+The disclosure arrays follow the cardinality, range, and ordering rules above; `transaction` is `T` as hex; `digest` is `D` as 64 hex characters. The transaction MUST parse completely, have empty scriptSigs, and have no witness serialization. Exactly one input of `T`, the vault input, MUST have the outpoint `funding`; `funding.txid` is in displayed order, so its bytes are reversed relative to the hash serialized in `T`. An exposed record requires non-null script, funding, and disclosure. An allocated record requires null disclosure. Retired and unknown records preserve any available disclosure; a non-null disclosure always requires non-null script and funding. Non-null funding requires a non-null script. Scripts MUST be nonempty and no longer than 10,000 bytes, and MUST be recognized by the importing wallet before use. Resource limits MAY cause an explicit import refusal, never truncation.
 
 Missing indices below `next_v` are permanently reserved and unavailable for allocation or disclosure. This permits compact representation of cancelled or retired allocations without marking them fresh. An export MUST include every active vault and every exposed vault for which retry is retained. It MUST retain roots, script bytes, and funding data needed to recover active funds. Imported manifests MUST preserve all known exposed or retired information and MUST NOT lower a locally established high-water mark.
 
@@ -211,7 +215,7 @@ A recoverable backup consists of both the seed backup, including any required BI
 
 Manifests MUST be updated durably before allocation is published and before any preimage is returned. An external backup that is unavailable or stale MUST NOT be represented as a current recoverable history. Implementations MAY keep local protected state and replicated journals, but MUST specify which loss or rollback events invalidate their continuity guarantee.
 
-On restoration, all imported allocated or exposed records MUST be treated as `unknown` for further disclosure unless the wallet has a trustworthy way to establish that the history is complete and current. Authenticated but old backups do not suffice. A current manifest must be tied to a protected continuity mechanism, such as a surviving authoritative wallet journal with enforced exclusive ownership. A seed, root match, user assertion, service response, or blockchain scan alone is insufficient.
+On restoration, all imported allocated or exposed records MUST be treated as `unknown` for further disclosure unless the wallet has a trustworthy way to establish that the history is complete and current. Authenticated but old backups do not suffice. A current manifest must be tied to a protected continuity mechanism, such as a surviving authoritative wallet journal with enforced exclusive ownership. A seed, root match, user assertion, service response, or blockchain scan alone is insufficient. This proposal does not specify an acceptable continuity mechanism. Until one is specified, recovery after loss of the authoritative writer is expected to proceed through the emergency path described below, outside custody conformance.
 
 When trustworthy continuity cannot be established, the wallet MAY recover public data and display balances, but MUST refuse new disclosures and reuse of that seed's allocation namespace under custody conformance. New deposits require a fresh independent seed. This restriction can prevent spending funds after loss of state; it is an explicit availability tradeoff. An emergency tool that bypasses it MUST identify the operation as outside custody conformance, and MUST NOT erase or relabel the uncertainty.
 
@@ -225,11 +229,15 @@ Secret-bearing backups for legacy randomly generated vaults require authenticate
 
 **SLIP-0021 rather than BIP-32.** A symmetric derivation path avoids coupling HORS secret recovery to an elliptic-curve private key, signature, or vendor-specific key export. Preserving the existing label makes the profile usable across vendors without changing already-derived commitments.
 
+**SLIP-0021 rather than BIP 85.** BIP 85 derives application entropy from a BIP-32 root key at a hardened path and is the established Bitcoin standard for that purpose. It was not chosen because the existing implementation already derives from the SLIP-0021 label, because SLIP-0021 is a purely symmetric construction that needs no elliptic-curve arithmetic in the secret-holding component, and because the Ledger operating system derives SLIP-0021 keys natively. A BIP 85 profile would produce different commitments and would need its own domain labels.
+
 **Fixed parameters rather than a configurable framework.** Secret length, commitment order, and index encoding are interoperability requirements. Allowing implementations to select them independently would make a profile identifier insufficient for recovery. Other parameter sets need new profiles and domain separation.
 
 **Twenty-byte secrets.** This length matches the existing implementation; it is not a recommendation for new hash-based signature designs and does not imply 128-bit post-quantum security. A longer seed cannot raise the security ceiling imposed by the commitment function or transaction construction.
 
-**One committed disclosure rather than a counter of confirmed spends.** Secret exposure happens at release, not mining. Even if a particular HORS construction tolerates some repeated usage under a specified analysis, this proposal does not rely on such a bound. Exact retries preserve usability without authorizing additional secret material or a changed transaction.
+**256-bit seed entropy.** Public commitments allow offline guessing of seeds and passphrases, and a quantum adversary roughly halves the effective entropy of that search. A 128-bit seed would then sit below the preimage ceiling of the 160-bit commitment, making the seed the weakest link; 256 bits keeps it above that ceiling without raising the ceiling itself.
+
+**One committed disclosure rather than a counter of confirmed spends.** Secret exposure happens at release, not mining. Even if a particular HORS construction tolerates some repeated usage under a specified analysis, this proposal does not rely on such a bound. Exact retries preserve usability without authorizing additional secret material or a changed transaction. The single-disclosure rule is a policy choice stricter than any reuse bound the QSB analysis may support; a future profile could relax it only with an explicitly specified bound. It is also why a fee-replacement transaction is refused after exposure.
 
 **State as part of recovery.** Determinism recovers keys but also reproduces old authority. Recording a reveal before returning it handles local crashes; it cannot stop a seed clone or an old backup from reproducing that reveal elsewhere. The specification makes that limitation explicit rather than treating a service's duplicate-root database as a cryptographic guarantee.
 
@@ -250,6 +258,8 @@ No ordinary Bitcoin wallet seed, path, address, PSBT, or transaction format is c
 ## Security Considerations
 
 Compromise of `S` or `K` exposes all vault secrets in this profile. Domain separation does not isolate vaults after root-key compromise. Public commitments enable an attacker to check guessed seeds or passphrases offline. New high-entropy seeds and strong seed-backup practices remain necessary.
+
+Commitments and roots can be derived for any index without authorization, so a host that can query the trusted component can enumerate every vault of a seed and link them on chain. Unauthenticated commitment export is convenient for deposit flows but has that privacy cost; this profile does not require approval for it, and products should weigh the tradeoff.
 
 HORS secrets have one-time-use constraints that ordinary ECDSA wallet interfaces do not express. Reusing a vault root, permitting additional index disclosures, rolling back history, or interpreting an unspent output as unused can invalidate the intended security model. Reorganizations must never roll back disclosure records.
 
@@ -283,7 +293,7 @@ B = abababababababababababababababababababababababababababababababab
 D = 498b1ea9b6c381e78fc76f0a9c2003b1d29ef25caf92d5a3b6a1d7dbc90f7d2c
 ```
 
-The last fixture tests digest encoding only; it does not assert that the arbitrary `B` is the hash of a valid spending transaction. Additional vectors cover seed-to-key derivation, network separation, and index boundaries.
+The last fixture tests digest encoding only; it does not assert that the arbitrary `B` is the hash of a valid spending transaction. Additional vectors cover seed-to-key derivation from a stated mnemonic and passphrase, network separation, index boundaries, and a binding derived from a serialized transaction together with its digest.
 
 Custody implementations MUST additionally test: durable-record failure before release; power loss after recording but before response; partial response and exact retry; changed transaction or index order; duplicate and out-of-range indices; corrupt and full storage; reset and stale-backup restoration; duplicate JSON members and inconsistent manifest data; conflicting writers; unknown profiles; allocation exhaustion; and a reorganization after disclosure. No such event may silently make an exposed key set fresh. A complete lifecycle reference implementation and independent interoperability testing remain prerequisites to advancing this proposal to Complete.
 

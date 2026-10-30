@@ -3,6 +3,8 @@
   "seed_vectors": [
     {
       "seed_source": "bip39",
+      "mnemonic": "all all all all all all all all all all all all",
+      "passphrase": "",
       "seed": "c76c4ac4f4e4a00d6b274d5c39c700bb4a7ddc04fbc6f78e85ca75007b5b495f74a9043eeb77bdd53aa6fc3a0e31462270316fa04b8c19114c8798706cd02ac8",
       "key": "f86a8947e1c227cf1a6d9a83c767291ef2f3fd51dd53b94f844bd5bde6e9e3e1"
     },
@@ -89,6 +91,26 @@
   },
   "binding_encoding": {
     "transaction": "020000000111111111111111111111111111111111111111111111111111111111111111110000000000ffffffff01e803000000000000015100000000",
-    "binding": "d50c25f740af092cc115965a317beae0d72397eabd2b0495148de1c5e6bd2c4e"
+    "binding": "d50c25f740af092cc115965a317beae0d72397eabd2b0495148de1c5e6bd2c4e",
+    "round0": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "round1": [
+      140,
+      141,
+      142,
+      143,
+      144,
+      145,
+      146
+    ],
+    "digest": "eb9907c687e2a86336eb342d649b7c41e030f4eafe4129072377828e0eb57405"
   }
 }
