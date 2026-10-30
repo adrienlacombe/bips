@@ -28,8 +28,6 @@ Independent implementations need to agree on which seed bytes enter derivation, 
 
 Deterministic derivation creates an additional problem: every restored copy of a seed can reproduce secrets that another copy has already disclosed. Neither a seed nor an unspent blockchain output proves that a secret set remains unused. A failed or abandoned withdrawal may already have disclosed preimages to an untrusted host. This proposal therefore treats disclosure history as persistent wallet state, independent of transaction confirmation.
 
-The existing QSB Ledger implementation supplies a useful interoperable derivation baseline. This proposal preserves its derivation and commitment-root bytes while imposing stronger allocation, disclosure-history, and recovery requirements. The proposal is not a claim that that implementation already satisfies those requirements.
-
 ## Specification
 
 The key words MUST, MUST NOT, REQUIRED, SHOULD, SHOULD NOT, and MAY are to be interpreted as described in RFC 2119 and RFC 8174 when written in capitals.
